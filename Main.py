@@ -1,54 +1,181 @@
 import os
-import telebot
-import requests
-import re
+from binance.client import Client
+from binance.enums import *
+from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# خپل ټوکن دلته له Environment Variables څخه واخلئ
-TOKEN = os.getenv('API_TOKEN')
+load_dotenv()
 
-# که ټوکن نه وي تنظیم شوی، خطا ښکاره کړئ
-if not TOKEN:
-    raise ValueError("API_TOKEN نه دی تنظیم شوی!")
+# Binance credentials
+api_key = os.getenv("API_KEY")
+api_secret = os.getenv("API_SECRET")
+client = Client(api_key, api_secret)
 
-# ټوکن چاپ کړئ (یوازې د ډیباګ لپاره، وروسته یې لرې کړئ)
-print(f"TOKEN: {TOKEN}")
+# Telegram
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID"))
 
-# ټیلیګرام بوټ جوړ کړئ
-bot = telebot.TeleBot(TOKEN)
+# Check access
+def is_owner(user_id):
+    return user_id == OWNER_ID
 
-# د قیمت ترلاسه کولو فنکشن
-def get_price(symbol):
+# Format price
+def format_price(symbol, price):
+    return "{:.8f}".format(price) if 'BTC' in symbol else "{:.4f}".format(price)
+
+# Commands
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+    await update.message.reply_text("سلام! بوټ چالان دی.")
+
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
-        response = requests.get(url, timeout=10)  # د 10 ثانیو ټایم آوټ
-        response.raise_for_status()  # د HTTP تېروتنو کنټرول
-        data = response.json()
-        if 'price' in data:
-            return f"د {symbol.upper()} اوسنی قیمت: ${float(data['price']):,.2f} USDT"
-        else:
-            return f"بخښنه غواړم، {symbol.upper()} ونه موندل شو."
-    except requests.exceptions.RequestException:
-        return "بخښنه غواړم، د Binance API ته لاسرسی نشته."
+        symbol = context.args[0].upper()
+        usdt_amount = float(context.args[1])
+        tp = float(context.args[2]) if len(context.args) > 2 else None
+        sl = float(context.args[3]) if len(context.args) > 3 else None
+
+        price = client.get_symbol_ticker(symbol=symbol + "USDT")
+        current_price = float(price["price"])
+        quantity = round(usdt_amount / current_price, 5)
+
+        # Market Buy
+        client.order_market_buy(symbol=symbol + "USDT", quantity=quantity)
+
+        msg = f"Buy executed: {symbol}, Qty: {quantity}"
+        if tp:
+            client.order_limit_sell(
+                symbol=symbol + "USDT",
+                quantity=quantity,
+                price=format_price(symbol, tp),
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+            msg += f"\nTake Profit set at {tp}"
+        if sl:
+            client.create_order(
+                symbol=symbol + "USDT",
+                side=SIDE_SELL,
+                type=ORDER_TYPE_STOP_LOSS_LIMIT,
+                quantity=quantity,
+                price=format_price(symbol, sl),
+                stopPrice=format_price(symbol, sl),
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+            msg += f"\nStop Loss set at {sl}"
+
+        await update.message.reply_text(msg)
     except Exception as e:
-        return f"تېروتنه: {e}"
+        await update.message.reply_text(f"Error: {str(e)}")
 
-# د هر ډول پیغام هندل کول
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    text = message.text.upper()
-    # د کرنسي نوم پیدا کول (لکه BTCUSDT)
-    match = re.fullmatch(r'[A-Z]{3,5}USDT', text)
-    if match:
-        symbol = match.group(0)
-        price = get_price(symbol)
-        bot.reply_to(message, price)
-    else:
-        bot.reply_to(message, "مهرباني وکړئ د کرنسي سم نوم ولیکئ، لکه BTCUSDT یا ETHUSDT")
-
-# بوټ چالان کړئ
-if __name__ == "__main__":
+async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
     try:
-        bot.polling(timeout=60, long_polling_timeout=60)
+        symbol = context.args[0].upper()
+        usdt_amount = float(context.args[1])
+        tp = float(context.args[2]) if len(context.args) > 2 else None
+        sl = float(context.args[3]) if len(context.args) > 3 else None
+
+        price = client.get_symbol_ticker(symbol=symbol + "USDT")
+        current_price = float(price["price"])
+        quantity = round(usdt_amount / current_price, 5)
+
+        # Market Sell
+        client.order_market_sell(symbol=symbol + "USDT", quantity=quantity)
+
+        msg = f"Sell executed: {symbol}, Qty: {quantity}"
+        if tp:
+            client.order_limit_buy(
+                symbol=symbol + "USDT",
+                quantity=quantity,
+                price=format_price(symbol, tp),
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+            msg += f"\nTake Profit set at {tp}"
+        if sl:
+            client.create_order(
+                symbol=symbol + "USDT",
+                side=SIDE_BUY,
+                type=ORDER_TYPE_STOP_LOSS_LIMIT,
+                quantity=quantity,
+                price=format_price(symbol, sl),
+                stopPrice=format_price(symbol, sl),
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+            msg += f"\nStop Loss set at {sl}"
+
+        await update.message.reply_text(msg)
     except Exception as e:
-        print(f"Bot Error: {e}")
-        print("بوت ونه چلېد. مهرباني وکړئ ټوکن یا کوډ وګورئ.")
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+    try:
+        assets = client.get_account()["balances"]
+        text = ""
+        for asset in assets:
+            free = float(asset["free"])
+            if free > 0:
+                text += f"{asset['asset']}: {free}\n"
+        await update.message.reply_text(text if text else "خالي حساب")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+    try:
+        symbol = context.args[0].upper()
+        trades = client.get_my_trades(symbol=symbol + "USDT")
+        text = ""
+        for t in trades[-5:]:
+            side = "Buy" if t['isBuyer'] else "Sell"
+            text += f"{side} | Price: {t['price']} | Qty: {t['qty']}\n"
+        await update.message.reply_text(text if text else "هیڅ ټریډ نشته.")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+    try:
+        symbol = context.args[0].upper()
+        orders = client.get_open_orders(symbol=symbol + "USDT")
+        for order in orders:
+            client.cancel_order(symbol=symbol + "USDT", orderId=order["orderId"])
+        await update.message.reply_text(f"ټول فعال امرونه لغوه شول ({symbol})")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def open_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update.effective_user.id):
+        return
+    try:
+        symbol = context.args[0].upper()
+        orders = client.get_open_orders(symbol=symbol + "USDT")
+        text = ""
+        for o in orders:
+            text += f"{o['side']} {o['origQty']} at {o['price']}\n"
+        await update.message.reply_text(text if text else "هیڅ فعال امر نشته.")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+# Run bot
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("buy", buy))
+app.add_handler(CommandHandler("sell", sell))
+app.add_handler(CommandHandler("balance", balance))
+app.add_handler(CommandHandler("history", history))
+app.add_handler(CommandHandler("cancel", cancel))
+app.add_handler(CommandHandler("open", open_orders))
+
+print("Bot is running...")
+app.run_polling()
