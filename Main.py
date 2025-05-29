@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -9,10 +10,15 @@ from telegram.ext import (
     ContextTypes,
 )
 from binance.client import Client
-from binance.enums import *
-import pandas as pd
-from tabulate import tabulate
-from config import *
+
+# د .env فایل لوستل
+load_dotenv()
+
+# د محیط променې اخستل
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID")
 
 # د Binance API سره وصلیدل
 client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
