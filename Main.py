@@ -1,73 +1,118 @@
-import logging
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from config import BINANCE_API_KEY, BINANCE_API_SECRET, TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID
+import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
+)
 from binance.client import Client
+from binance.enums import *
+import pandas as pd
+from tabulate import tabulate
+from config import *
 
-client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+# د Binance API سره وصلیدل
+client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
-logging.basicConfig(level=logging.INFO)
-
-def private_only(func):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_user.id != ALLOWED_USER_ID:
-            await update.message.reply_text("❌ دا بوټ یوازې د مالک لپاره دی.")
-            return
-        return await func(update, context)
-    return wrapper
-
-@private_only
+# د بوټ اصلي مینو
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ بوټ فعاله شو! کارونه: /buy /sell /balance")
-
-@private_only
-async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("استعمال: /buy BTCUSDT 10")
+    if str(update.effective_user.id) != TELEGRAM_USER_ID:
+        await update.message.reply_text("❌ تاسو اجازه نلرئ!")
         return
-    symbol = args[0].upper()
-    amount = float(args[1])
-    try:
-        order = client.order_market_buy(symbol=symbol, quoteOrderQty=amount)
-        await update.message.reply_text(f"✅ BUY: {symbol} - {amount} USDT")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
 
-@private_only
-async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("استعمال: /sell BTCUSDT 10")
-        return
-    symbol = args[0].upper()
-    amount = float(args[1])
-    try:
-        order = client.order_market_sell(symbol=symbol, quoteOrderQty=amount)
-        await update.message.reply_text(f"✅ SELL: {symbol} - {amount} USDT")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+    keyboard = [
+        [InlineKeyboardButton("🟢 سپاټ اخيستل (Buy Spot)", callback_data="buy_spot")],
+        [InlineKeyboardButton("🔴 سپاټ خرڅول (Sell Spot)", callback_data="sell_spot")],
+        [InlineKeyboardButton("📈 فیوچرز ټریډ (Futures)", callback_data="futures_trade")],
+        [InlineKeyboardButton("📊 بیلانس (Balance)", callback_data="balance")],
+        [InlineKeyboardButton("📌 فعال پوزیشنونه", callback_data="positions")],
+        [InlineKeyboardButton("♻️ لیږد (Spot ⇄ Futures)", callback_data="transfer")],
+        [InlineKeyboardButton("⚙️ تنظیمات", callback_data="settings")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "**سلام کوډ جانه! 👋**\nزه یم ستاسو د فیوچرز او سپاټ ټریډینګ مرستیال. لاندې انتخاب وکړئ:",
+        reply_markup=reply_markup,
+    )
 
-@private_only
+# د سپاټ پیرود (Buy Spot)
+async def buy_spot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("🔷 کوم سکه واخلم؟ (BTCUSDT):")
+    context.user_data["action"] = "buy_spot"
+
+# د فیوچرز ټریډ مینو
+async def futures_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🟢 لانګ (Buy/Long)", callback_data="futures_long")],
+        [InlineKeyboardButton("🔴 شارټ (Sell/Short)", callback_data="futures_short")],
+        [InlineKeyboardButton("📌 فعال پوزیشنونه", callback_data="futures_positions")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.message.reply_text(
+        "**📈 فیوچرز ټریډینګ:**", reply_markup=reply_markup
+    )
+
+# د بیلانس چیک (Spot + Futures)
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        account = client.get_account()
-        msg = "💰 Spot Balance:\n"
-        for asset in account['balances']:
-            free = float(asset['free'])
-            if free > 0:
-                msg += f"{asset['asset']}: {free}\n"
-        await update.message.reply_text(msg)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+    # سپاټ بیلانس
+    spot_balance = client.get_account()
+    usdt_balance = next((item for item in spot_balance["balances"] if item["asset"] == "USDT"), None)
+    
+    # فیوچرز بیلانس
+    futures_balance = client.futures_account_balance()
+    futures_usdt = next((item for item in futures_balance if item["asset"] == "USDT"), None)
+    
+    response = (
+        "**💼 ستاسو بیلانس:**\n"
+        f"🔹 سپاټ USDT: **{float(usdt_balance['free']):.2f}**\n"
+        f"🔹 فیوچرز USDT: **{float(futures_usdt['balance']):.2f}**"
+    )
+    await update.callback_query.message.reply_text(response, parse_mode="Markdown")
 
-def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("buy", buy))
-    app.add_handler(CommandHandler("sell", sell))
-    app.add_handler(CommandHandler("balance", balance))
-    app.run_polling()
+# د لیږد (Spot ⇄ Futures)
+async def transfer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🔵 Spot → Futures", callback_data="spot_to_futures")],
+        [InlineKeyboardButton("🔴 Futures → Spot", callback_data="futures_to_spot")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.message.reply_text(
+        "♻️ د لیږد ډول وټاکئ:", reply_markup=reply_markup
+    )
 
+# د فعال پوزیشنونو لیست
+async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # د سپاټ پوزیشنونه
+    open_orders = client.get_open_orders()
+    # د فیوچرز پوزیشنونه
+    futures_positions = client.futures_position_information()
+    
+    response = "**📌 فعال پوزیشنونه:**\n"
+    for pos in futures_positions:
+        if float(pos["positionAmt"]) != 0:
+            response += (
+                f"🔹 {pos['symbol']} | {pos['positionSide']} | مقدار: {pos['positionAmt']}\n"
+                f"   PNL: {pos['unRealizedProfit']} USDT\n"
+            )
+    
+    await update.callback_query.message.reply_text(response, parse_mode="Markdown")
+
+# د بوټ پیل کول
 if __name__ == "__main__":
-    main()
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # Command Handlers
+    app.add_handler(CommandHandler("start", start))
+    
+    # Callback Handlers
+    app.add_handler(CallbackQueryHandler(buy_spot, pattern="buy_spot"))
+    app.add_handler(CallbackQueryHandler(futures_trade, pattern="futures_trade"))
+    app.add_handler(CallbackQueryHandler(balance, pattern="balance"))
+    app.add_handler(CallbackQueryHandler(positions, pattern="positions"))
+    app.add_handler(CallbackQueryHandler(transfer, pattern="transfer"))
+    
+    print("✅ بوټ فعال شو...")
+    app.run_polling()
