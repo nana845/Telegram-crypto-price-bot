@@ -1,124 +1,118 @@
 import os
-from dotenv import load_dotenv
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
-    MessageHandler,
     CallbackQueryHandler,
-    filters,
     ContextTypes,
 )
-from binance.client import Client
+from binance.spot import Spot as Client
+from binance.error import ClientError
+from dotenv import load_dotenv
 
-# د .env فایل لوستل
+# د چاپیریالي پروینو لوستل
 load_dotenv()
 
-# د محیط променې اخستل
+# د API کیونو تنظیم
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID")
 
 # د Binance API سره وصلیدل
-client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
+client = Client(
+    api_key=BINANCE_API_KEY,
+    api_secret=BINANCE_SECRET_KEY,
+    base_url='https://api.binance.com'
+)
 
-# د بوټ اصلي مینو
+# د اررورونو لګ ثبتولو تنظیم
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """د بوټ اصلي مینو"""
     if str(update.effective_user.id) != TELEGRAM_USER_ID:
         await update.message.reply_text("❌ تاسو اجازه نلرئ!")
         return
 
     keyboard = [
-        [InlineKeyboardButton("🟢 سپاټ اخيستل (Buy Spot)", callback_data="buy_spot")],
-        [InlineKeyboardButton("🔴 سپاټ خرڅول (Sell Spot)", callback_data="sell_spot")],
-        [InlineKeyboardButton("📈 فیوچرز ټریډ (Futures)", callback_data="futures_trade")],
-        [InlineKeyboardButton("📊 بیلانس (Balance)", callback_data="balance")],
-        [InlineKeyboardButton("📌 فعال پوزیشنونه", callback_data="positions")],
-        [InlineKeyboardButton("♻️ لیږد (Spot ⇄ Futures)", callback_data="transfer")],
-        [InlineKeyboardButton("⚙️ تنظیمات", callback_data="settings")],
+        [InlineKeyboardButton("🟢 سپاټ اخيستل", callback_data="buy_spot")],
+        [InlineKeyboardButton("🔴 سپاټ خرڅول", callback_data="sell_spot")],
+        [InlineKeyboardButton("📈 فیوچرز ټریډ", callback_data="futures_trade")],
+        [InlineKeyboardButton("📊 بیلانس", callback_data="balance")],
+        [InlineKeyboardButton("📌 پوزیشنونه", callback_data="positions")],
+        [InlineKeyboardButton("♻️ لیږد", callback_data="transfer")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "**سلام کوډ جانه! 👋**\nزه یم ستاسو د فیوچرز او سپاټ ټریډینګ مرستیال. لاندې انتخاب وکړئ:",
-        reply_markup=reply_markup,
+        "**سلام! زه ستاسو د Binance مرستیال یم.**\nلاندې انتخاب وکړئ:",
+        reply_markup=reply_markup
     )
 
-# د سپاټ پیرود (Buy Spot)
-async def buy_spot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("🔷 کوم سکه واخلم؟ (BTCUSDT):")
-    context.user_data["action"] = "buy_spot"
-
-# د فیوچرز ټریډ مینو
-async def futures_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🟢 لانګ (Buy/Long)", callback_data="futures_long")],
-        [InlineKeyboardButton("🔴 شارټ (Sell/Short)", callback_data="futures_short")],
-        [InlineKeyboardButton("📌 فعال پوزیشنونه", callback_data="futures_positions")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.callback_query.message.reply_text(
-        "**📈 فیوچرز ټریډینګ:**", reply_markup=reply_markup
-    )
-
-# د بیلانس چیک (Spot + Futures)
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # سپاټ بیلانس
-    spot_balance = client.get_account()
-    usdt_balance = next((item for item in spot_balance["balances"] if item["asset"] == "USDT"), None)
-    
-    # فیوچرز بیلانس
-    futures_balance = client.futures_account_balance()
-    futures_usdt = next((item for item in futures_balance if item["asset"] == "USDT"), None)
-    
-    response = (
-        "**💼 ستاسو بیلانس:**\n"
-        f"🔹 سپاټ USDT: **{float(usdt_balance['free']):.2f}**\n"
-        f"🔹 فیوچرز USDT: **{float(futures_usdt['balance']):.2f}**"
-    )
-    await update.callback_query.message.reply_text(response, parse_mode="Markdown")
+    """د سپاټ او فیوچرز بیلانس ښودل"""
+    try:
+        # سپاټ بیلانس
+        spot_balance = client.account()
+        usdt_balance = next((item for item in spot_balance["balances"] if item["asset"] == "USDT"), None)
+        
+        # فیوچرز بیلانس
+        futures_balance = client.futures_account()
+        futures_usdt = next((item for item in futures_balance["assets"] if item["asset"] == "USDT"), None)
+        
+        response = (
+            "**💼 ستاسو بیلانس:**\n"
+            f"🔹 سپاټ USDT: {float(usdt_balance['free']):.2f}\n"
+            f"🔹 فیوچرز USDT: {float(futures_usdt['availableBalance']):.2f}"
+        )
+        await update.callback_query.message.reply_text(response)
+    except ClientError as e:
+        await update.callback_query.message.reply_text(f"❌ اررور: {e.message}")
 
-# د لیږد (Spot ⇄ Futures)
-async def transfer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🔵 Spot → Futures", callback_data="spot_to_futures")],
-        [InlineKeyboardButton("🔴 Futures → Spot", callback_data="futures_to_spot")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.callback_query.message.reply_text(
-        "♻️ د لیږد ډول وټاکئ:", reply_markup=reply_markup
-    )
-
-# د فعال پوزیشنونو لیست
 async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # د سپاټ پوزیشنونه
-    open_orders = client.get_open_orders()
-    # د فیوچرز پوزیشنونه
-    futures_positions = client.futures_position_information()
-    
-    response = "**📌 فعال پوزیشنونه:**\n"
-    for pos in futures_positions:
-        if float(pos["positionAmt"]) != 0:
-            response += (
-                f"🔹 {pos['symbol']} | {pos['positionSide']} | مقدار: {pos['positionAmt']}\n"
-                f"   PNL: {pos['unRealizedProfit']} USDT\n"
-            )
-    
-    await update.callback_query.message.reply_text(response, parse_mode="Markdown")
+    """د فعال پوزیشنونو لیست"""
+    try:
+        positions = client.futures_position_information()
+        response = "**📌 فعال پوزیشنونه:**\n"
+        
+        for pos in positions:
+            if float(pos["positionAmt"]) != 0:
+                response += (
+                    f"{pos['symbol']} | {pos['positionSide']}\n"
+                    f"مقدار: {pos['positionAmt']} | PNL: {pos['unRealizedProfit']} USDT\n\n"
+                )
+        
+        await update.callback_query.message.reply_text(response)
+    except ClientError as e:
+        await update.callback_query.message.reply_text(f"❌ اررور: {e.message}")
 
-# د بوټ پیل کول
-if __name__ == "__main__":
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """د کالبکونو مدیریت"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "balance":
+        await balance(update, context)
+    elif query.data == "positions":
+        await positions(update, context)
+    else:
+        await query.message.reply_text("✅ دا فعالیت به ډیر ژر اضافه شي")
+
+def main():
+    """د بوټ پیلولو اصلي فنکشن"""
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Command Handlers
+    # د کمانډونو مدیریت
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     
-    # Callback Handlers
-    app.add_handler(CallbackQueryHandler(buy_spot, pattern="buy_spot"))
-    app.add_handler(CallbackQueryHandler(futures_trade, pattern="futures_trade"))
-    app.add_handler(CallbackQueryHandler(balance, pattern="balance"))
-    app.add_handler(CallbackQueryHandler(positions, pattern="positions"))
-    app.add_handler(CallbackQueryHandler(transfer, pattern="transfer"))
-    
-    print("✅ بوټ فعال شو...")
+    # د بوټ پیلول
     app.run_polling()
+    logging.info("✅ بوټ په بریالیتوب سره پیل شو")
+
+if __name__ == "__main__":
+    main()
